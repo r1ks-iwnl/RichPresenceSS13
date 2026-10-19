@@ -46,24 +46,4 @@ target_link_libraries(RPSS13_Tests PRIVATE
 )
 
 add_test(NAME RPSS13_Tests COMMAND RPSS13_Tests)
-
-# Test Suite
-enable_testing()
-
-add_executable(RPSS13_Tests
-    tests/test_main.cpp
-    src/discord_rpc.cpp
-    src/game_detector.cpp
-    src/byond_topic.cpp
-)
-
-target_include_directories(RPSS13_Tests PRIVATE src)
-
-target_link_libraries(RPSS13_Tests PRIVATE 
-    nlohmann_json::nlohmann_json
-    ws2_32
-    iphlpapi
-)
-
-add_test(NAME RPSS13_Tests COMMAND RPSS13_Tests)
 )

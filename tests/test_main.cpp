@@ -120,20 +120,24 @@ bool test_app_config() {
     AppConfig config;
     TEST_ASSERT(config.client_id == "1545495325366550630", "default client_id should match");
     TEST_ASSERT(config.large_image_key == "ss13", "default large_image_key should be ss13");
-    TEST_ASSERT(config.poll_interval_seconds == 5, "default poll interval should be 5");
+    TEST_ASSERT(config.local_poll_interval_seconds == 3, "default local_poll_interval_seconds should be 3");
+    TEST_ASSERT(config.server_refresh_seconds == 60, "default server_refresh_seconds should be 60");
+    TEST_ASSERT(config.failed_query_cooldown_seconds == 180, "default failed_query_cooldown_seconds should be 180");
     TEST_ASSERT(config.topic_timeout_ms == 3000, "default topic timeout should be 3000ms");
 
     // Save and load test
     std::string temp_config = "test_temp_config.json";
     config.client_id = "999888777666555444";
     config.large_image_key = "custom_icon";
-    config.poll_interval_seconds = 10;
+    config.server_refresh_seconds = 45;
+    config.failed_query_cooldown_seconds = 120;
     config.save_to_file(temp_config);
 
     AppConfig loaded = AppConfig::load_or_create(temp_config);
     TEST_ASSERT(loaded.client_id == "999888777666555444", "loaded client_id should match saved");
     TEST_ASSERT(loaded.large_image_key == "custom_icon", "loaded large_image_key should match saved");
-    TEST_ASSERT(loaded.poll_interval_seconds == 10, "loaded poll_interval should match saved");
+    TEST_ASSERT(loaded.server_refresh_seconds == 45, "loaded server_refresh_seconds should match saved");
+    TEST_ASSERT(loaded.failed_query_cooldown_seconds == 120, "loaded failed_query_cooldown_seconds should match saved");
 
     DeleteFileA(temp_config.c_str());
     return true;

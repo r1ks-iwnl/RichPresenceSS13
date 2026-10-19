@@ -5,7 +5,8 @@
 #include <chrono>
 #include <thread>
 #include <atomic>
-#include <csignal>
+#include <algorithm>
+#include <cstring>
 
 #include "config.h"
 #include "server.h"
@@ -22,6 +23,16 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD signal) {
         return TRUE;
     }
     return FALSE;
+}
+
+static bool activity_equals(const DiscordActivity& a, const DiscordActivity& b) {
+    return a.details == b.details &&
+           a.state == b.state &&
+           a.start_timestamp == b.start_timestamp &&
+           a.large_image == b.large_image &&
+           a.large_text == b.large_text &&
+           a.small_image == b.small_image &&
+           a.small_text == b.small_text;
 }
 
 int main(int argc, char* argv[]) {
@@ -50,19 +61,25 @@ int main(int argc, char* argv[]) {
     std::cout << "====================================================\n";
     std::cout << "         Space Station 13 Discord Rich Presence     \n";
     std::cout << "====================================================\n";
-    std::cout << "Client ID     : " << config.client_id << "\n";
-    std::cout << "Large Image   : " << config.large_image_key << " (" << config.large_image_text << ")\n";
-    std::cout << "Poll Interval : " << config.poll_interval_seconds << "s\n";
-    std::cout << "Config File   : config.json\n";
+    std::cout << "Client ID         : " << config.client_id << "\n";
+    std::cout << "Large Image       : " << config.large_image_key << " (" << config.large_image_text << ")\n";
+    std::cout << "Local Process Poll: " << config.local_poll_interval_seconds << "s (Zero network traffic)\n";
+    std::cout << "Server Refresh    : " << config.server_refresh_seconds << "s (Rate-limited host queries)\n";
+    std::cout << "Host Backoff      : " << config.failed_query_cooldown_seconds << "s (On topic timeout/blocked)\n";
+    std::cout << "Config File       : config.json\n";
     std::cout << "----------------------------------------------------\n";
     std::cout << "Searching for dreamseeker.exe... (Press Ctrl+C to stop)\n\n";
 
     DiscordRpcClient discord(config.client_id);
 
     bool was_in_game = false;
-    std::string last_server_ip;
-    uint16_t last_server_port = 0;
-    int last_round_id = -1;
+    std::string active_server_ip;
+    uint16_t active_server_port = 0;
+    bool active_server_supports_topic = true;
+    bool has_server_info = false;
+    Server cached_server;
+    DiscordActivity last_sent_activity;
+    std::chrono::steady_clock::time_point last_topic_query_time{};
 
     while (g_running) {
         auto dreamseeker_pids = GameDetector::find_dreamseeker_pids();
@@ -72,17 +89,20 @@ int main(int argc, char* argv[]) {
                 std::cout << "[Status] DreamSeeker closed. Clearing Discord Rich Presence.\n";
                 discord.clear_activity();
                 was_in_game = false;
-                last_server_ip.clear();
-                last_server_port = 0;
-                last_round_id = -1;
+                active_server_ip.clear();
+                active_server_port = 0;
+                active_server_supports_topic = true;
+                has_server_info = false;
+                last_topic_query_time = {};
+                last_sent_activity = {};
             }
         } else {
-            // DreamSeeker is running; check for active game server connections
+            // DreamSeeker is running; inspect active TCP connections
             auto connections = GameDetector::find_server_connections(dreamseeker_pids);
 
             if (connections.empty()) {
-                if (!was_in_game) {
-                    // DreamSeeker is open, but not yet connected to a server (e.g. in pager or lobby)
+                // DreamSeeker is open, but has no active game server connection (e.g. in pager or lobby)
+                if (!was_in_game || !active_server_ip.empty()) {
                     if (!discord.is_connected()) {
                         discord.connect();
                     }
@@ -91,22 +111,70 @@ int main(int argc, char* argv[]) {
                     activity.state = "Space Station 13";
                     activity.large_image = config.large_image_key;
                     activity.large_text = config.large_image_text;
-                    discord.set_activity(activity);
+
+                    if (!activity_equals(activity, last_sent_activity)) {
+                        discord.set_activity(activity);
+                        last_sent_activity = activity;
+                        std::cout << "[Status] DreamSeeker in menus/lobby. Waiting for game connection...\n";
+                    }
+
                     was_in_game = true;
-                    std::cout << "[Status] DreamSeeker running. Waiting for server connection...\n";
+                    active_server_ip.clear();
+                    active_server_port = 0;
+                    has_server_info = false;
+                    last_topic_query_time = {};
                 }
             } else {
-                // We have active candidate connections
-                // Try querying ?status on candidates to find the active SS13 server
-                bool found_server = false;
-                Server active_server;
-
+                // We have active TCP connections.
+                // Check if our currently active server is still connected.
+                bool active_still_connected = false;
                 for (const auto& conn : connections) {
-                    std::string topic_response;
-                    if (ByondTopic::query(conn.ip, conn.port, "?status", topic_response, config.topic_timeout_ms)) {
-                        active_server = Server::from_topic_response(topic_response, conn.ip, conn.port);
-                        found_server = true;
+                    if (conn.ip == active_server_ip && conn.port == active_server_port) {
+                        active_still_connected = true;
                         break;
+                    }
+                }
+
+                // If disconnected from previous server or connecting to a new one, switch to primary connection
+                if (!active_still_connected) {
+                    active_server_ip = connections[0].ip;
+                    active_server_port = connections[0].port;
+                    active_server_supports_topic = true;
+                    has_server_info = false;
+                    // Reset timer to immediately query the new server once
+                    last_topic_query_time = {};
+                    std::cout << "[Status] Detected game connection to " << active_server_ip << ":" << active_server_port << "\n";
+                }
+
+                // Rate-limiting logic: determine if it's time to query the remote server
+                auto now = std::chrono::steady_clock::now();
+                int required_cooldown = active_server_supports_topic
+                    ? config.server_refresh_seconds
+                    : config.failed_query_cooldown_seconds;
+
+                bool is_first_query = (last_topic_query_time.time_since_epoch().count() == 0);
+                auto elapsed_seconds = std::chrono::duration_cast<std::chrono::seconds>(now - last_topic_query_time).count();
+
+                if (is_first_query || elapsed_seconds >= required_cooldown) {
+                    last_topic_query_time = now;
+                    std::string topic_response;
+
+                    if (ByondTopic::query(active_server_ip, active_server_port, "?status", topic_response, config.topic_timeout_ms)) {
+                        cached_server = Server::from_topic_response(topic_response, active_server_ip, active_server_port);
+                        has_server_info = true;
+                        active_server_supports_topic = true;
+
+                        std::cout << "[SS13] Topic query: " << cached_server.get_name()
+                                  << " | Map: " << (cached_server.get_map_name().empty() ? "Station" : cached_server.get_map_name())
+                                  << " | Players: " << cached_server.get_population()
+                                  << " | Next refresh in " << config.server_refresh_seconds << "s\n";
+                    } else {
+                        if (active_server_supports_topic) {
+                            std::cout << "[SS13] Notice: Server at " << active_server_ip << ":" << active_server_port
+                                      << " did not respond to ?status. Entering " << config.failed_query_cooldown_seconds
+                                      << "s backoff cooldown to avoid host strain.\n";
+                        }
+                        active_server_supports_topic = false;
                     }
                 }
 
@@ -117,76 +185,55 @@ int main(int argc, char* argv[]) {
                     }
                 }
 
-                if (found_server) {
-                    // Rich presence with live server statistics
-                    DiscordActivity activity;
-                    activity.details = active_server.get_name();
+                // Construct presence activity
+                DiscordActivity activity;
+                if (has_server_info) {
+                    activity.details = cached_server.get_name();
 
                     std::string state_text;
-                    if (!active_server.get_map_name().empty()) {
-                        state_text = active_server.get_map_name();
-                    } else if (!active_server.get_gamemode().empty()) {
-                        state_text = active_server.get_gamemode();
+                    if (!cached_server.get_map_name().empty()) {
+                        state_text = cached_server.get_map_name();
+                    } else if (!cached_server.get_gamemode().empty()) {
+                        state_text = cached_server.get_gamemode();
                     } else {
                         state_text = "Station";
                     }
-                    state_text += " (" + std::to_string(active_server.get_population()) + " players)";
+                    state_text += " (" + std::to_string(cached_server.get_population()) + " players)";
                     activity.state = state_text;
 
-                    // Round start timestamp for elapsed time
-                    if (active_server.get_round_duration_sec() > 0) {
+                    // Round start timestamp: Discord's UI automatically counts elapsed seconds upward
+                    // from this timestamp without requiring repeated updates!
+                    if (cached_server.get_round_duration_sec() > 0) {
                         auto now_sec = std::chrono::duration_cast<std::chrono::seconds>(
                             std::chrono::system_clock::now().time_since_epoch()
                         ).count();
-                        activity.start_timestamp = now_sec - active_server.get_round_duration_sec();
+                        activity.start_timestamp = now_sec - cached_server.get_round_duration_sec();
                     }
 
                     activity.large_image = config.large_image_key;
                     activity.large_text = config.large_image_text;
                     activity.small_image = config.small_image_key;
                     activity.small_text = config.small_image_text;
-
-                    discord.set_activity(activity);
-
-                    // Print log on server change or new round
-                    if (active_server.get_ip() != last_server_ip || 
-                        active_server.get_port() != last_server_port ||
-                        (active_server.get_round_id() != 0 && active_server.get_round_id() != last_round_id)) {
-                        
-                        std::cout << "[SS13] Connected: " << active_server.get_name()
-                                  << " | Map: " << (active_server.get_map_name().empty() ? "Unknown" : active_server.get_map_name())
-                                  << " | Players: " << active_server.get_population()
-                                  << " | Round Duration: " << (active_server.get_round_duration_sec() / 60) << "m "
-                                  << (active_server.get_round_duration_sec() % 60) << "s\n";
-
-                        last_server_ip = active_server.get_ip();
-                        last_server_port = active_server.get_port();
-                        last_round_id = active_server.get_round_id();
-                    }
-                    was_in_game = true;
                 } else {
-                    // Fallback: connection detected but ?status did not respond (some servers restrict ?status)
-                    const auto& primary = connections[0];
-                    DiscordActivity activity;
+                    // Fallback when ?status is disabled or firewalled by host
                     activity.details = "Playing Space Station 13";
-                    activity.state = "Server: " + primary.ip + ":" + std::to_string(primary.port);
+                    activity.state = "Server: " + active_server_ip + ":" + std::to_string(active_server_port);
                     activity.large_image = config.large_image_key;
                     activity.large_text = config.large_image_text;
-
-                    discord.set_activity(activity);
-
-                    if (primary.ip != last_server_ip || primary.port != last_server_port) {
-                        std::cout << "[SS13] Connected to " << primary.ip << ":" << primary.port << " (Topic query unsupported or blocked)\n";
-                        last_server_ip = primary.ip;
-                        last_server_port = primary.port;
-                    }
-                    was_in_game = true;
                 }
+
+                // Only send update to Discord if the activity data actually changed
+                if (!activity_equals(activity, last_sent_activity)) {
+                    discord.set_activity(activity);
+                    last_sent_activity = activity;
+                }
+
+                was_in_game = true;
             }
         }
 
-        // Sleep in short 250ms increments to stay responsive to Ctrl+C
-        for (int i = 0; i < config.poll_interval_seconds * 4 && g_running; ++i) {
+        // Sleep for local poll interval in short 250ms increments to stay responsive to Ctrl+C
+        for (int i = 0; i < config.local_poll_interval_seconds * 4 && g_running; ++i) {
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
         }
     }
@@ -199,4 +246,3 @@ int main(int argc, char* argv[]) {
     std::cout << "[App] Done. Goodbye!\n";
     return 0;
 }
-

@@ -59,10 +59,19 @@ Upon first run, the program creates a default `config.json` next to the executab
     "large_image_text": "Space Station 13",
     "small_image_key": "",
     "small_image_text": "",
-    "poll_interval_seconds": 5,
+    "local_poll_interval_seconds": 3,
+    "server_refresh_seconds": 60,
+    "failed_query_cooldown_seconds": 180,
     "topic_timeout_ms": 3000
 }
 ```
+
+### Host-Friendly Polling & Rate Limiting
+- **Zero-Network Process Polling (`local_poll_interval_seconds: 3`)**: Checks whether `dreamseeker.exe` is open or closed using local Windows kernel API calls (`Toolhelp32` / `GetExtendedTcpTable`). This generates **zero network traffic**.
+- **Rate-Limited Server Refresh (`server_refresh_seconds: 60`)**: Only queries the BYOND server for fresh player count/mode once per 60 seconds (SS13 rounds take 40-90+ minutes). Discord automatically counts elapsed round seconds upward on the user's client UI, so spamming the server for timestamps is completely unnecessary.
+- **Backoff on Blocked/Unresponsive Topic (`failed_query_cooldown_seconds: 180`)**: If a host has `world.Topic` disabled or blocked by a firewall, the client backs off for 3 minutes before trying again, preventing fail2ban / rate-limiting triggers on the host.
+- **Redundant Update Suppression**: Discord presence is only sent when game data actually changes.
+
 
 ### Discord Application Setup
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications).
