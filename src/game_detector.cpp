@@ -79,8 +79,13 @@ std::vector<ServerEndpoint> GameDetector::find_server_connections(const std::vec
 
         if (inet_ntop(AF_INET, &addr, ip_buf, sizeof(ip_buf))) {
             std::string ip_str = ip_buf;
-            // Differentiate local loopback IPC (BYOND pager communication) from remote game servers
+
+            // Handle loopback connections
             if (ip_str.rfind("127.", 0) == 0 || ip_str == "0.0.0.0") {
+                // Ignore BYOND pager/hub IPC sockets (ports 50987, 50988) or ephemeral range
+                if (remote_port == 50987 || remote_port == 50988 || remote_port >= 49152) {
+                    continue;
+                }
                 loopback_conns.push_back({ip_str, remote_port, row.dwOwningPid});
             } else {
                 external_conns.push_back({ip_str, remote_port, row.dwOwningPid});
@@ -88,11 +93,11 @@ std::vector<ServerEndpoint> GameDetector::find_server_connections(const std::vec
         }
     }
 
-    // If external connections exist, they are remote game servers (127.0.0.1 is just BYOND pager IPC)
+    // External connections are real internet game servers and always take priority
     if (!external_conns.empty()) {
         return external_conns;
     }
 
-    // Only return loopback if no external connections exist (e.g. user self-hosting DreamDaemon locally)
+    // Only return loopback if no external connections exist (e.g. self-hosting on localhost)
     return loopback_conns;
 }

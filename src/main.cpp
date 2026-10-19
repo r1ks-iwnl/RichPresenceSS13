@@ -164,17 +164,32 @@ int main(int argc, char* argv[]) {
                     }
 
                     if (!found_responsive) {
-                        // Fallback: None of the candidate connections responded to ?status (e.g. host blocks ?status)
-                        // Pick the primary connection (highest priority external server)
-                        active_server_ip = connections[0].ip;
-                        active_server_port = connections[0].port;
-                        active_server_supports_topic = false;
-                        has_server_info = false;
-                        last_topic_query_time = std::chrono::steady_clock::now();
+                        // Check if there is an external (non-loopback) connection to fall back to
+                        bool has_external = false;
+                        for (const auto& conn : connections) {
+                            if (conn.ip.rfind("127.", 0) != 0 && conn.ip != "0.0.0.0") {
+                                active_server_ip = conn.ip;
+                                active_server_port = conn.port;
+                                has_external = true;
+                                break;
+                            }
+                        }
 
-                        std::cout << "[SS13] Connected to " << active_server_ip << ":" << active_server_port
-                                  << " (?status blocked or unsupported). Backing off for "
-                                  << config.failed_query_cooldown_seconds << "s.\n";
+                        if (has_external) {
+                            active_server_supports_topic = false;
+                            has_server_info = false;
+                            last_topic_query_time = std::chrono::steady_clock::now();
+
+                            std::cout << "[SS13] Connected to " << active_server_ip << ":" << active_server_port
+                                      << " (?status blocked or unsupported). Backing off for "
+                                      << config.failed_query_cooldown_seconds << "s.\n";
+                        } else {
+                            // No external server connection; loopback connections without ?status are just pager/menu IPC
+                            active_server_ip.clear();
+                            active_server_port = 0;
+                            has_server_info = false;
+                            last_topic_query_time = {};
+                        }
                     }
                 } else {
                     // Active server is already identified and still connected.
