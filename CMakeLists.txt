@@ -46,4 +46,3 @@ target_link_libraries(RPSS13_Tests PRIVATE
 )
 
 add_test(NAME RPSS13_Tests COMMAND RPSS13_Tests)
-)

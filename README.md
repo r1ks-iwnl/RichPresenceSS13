@@ -61,7 +61,7 @@ Upon first run, the program creates a default `config.json` next to the executab
     "small_image_text": "",
     "local_poll_interval_seconds": 3,
     "server_refresh_seconds": 60,
-    "failed_query_cooldown_seconds": 180,
+    "failed_query_cooldown_seconds": 60,
     "topic_timeout_ms": 3000
 }
 ```

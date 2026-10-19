@@ -97,7 +97,7 @@ int main(int argc, char* argv[]) {
                 last_sent_activity = {};
             }
         } else {
-            // DreamSeeker is running; inspect active TCP connections
+            // DreamSeeker is running; inspect active TCP connections (external servers prioritized over loopback)
             auto connections = GameDetector::find_server_connections(dreamseeker_pids);
 
             if (connections.empty()) {
@@ -125,56 +125,80 @@ int main(int argc, char* argv[]) {
                     last_topic_query_time = {};
                 }
             } else {
-                // We have active TCP connections.
-                // Check if our currently active server is still connected.
+                // Check if our currently active server is still in the connection list
                 bool active_still_connected = false;
-                for (const auto& conn : connections) {
-                    if (conn.ip == active_server_ip && conn.port == active_server_port) {
-                        active_still_connected = true;
-                        break;
+                if (!active_server_ip.empty()) {
+                    for (const auto& conn : connections) {
+                        if (conn.ip == active_server_ip && conn.port == active_server_port) {
+                            active_still_connected = true;
+                            break;
+                        }
                     }
                 }
 
-                // If disconnected from previous server or connecting to a new one, switch to primary connection
+                // If disconnected or not yet chosen, discover the active server among candidates
                 if (!active_still_connected) {
-                    active_server_ip = connections[0].ip;
-                    active_server_port = connections[0].port;
-                    active_server_supports_topic = true;
-                    has_server_info = false;
-                    // Reset timer to immediately query the new server once
-                    last_topic_query_time = {};
-                    std::cout << "[Status] Detected game connection to " << active_server_ip << ":" << active_server_port << "\n";
-                }
+                    bool found_responsive = false;
 
-                // Rate-limiting logic: determine if it's time to query the remote server
-                auto now = std::chrono::steady_clock::now();
-                int required_cooldown = active_server_supports_topic
-                    ? config.server_refresh_seconds
-                    : config.failed_query_cooldown_seconds;
+                    for (const auto& conn : connections) {
+                        std::string topic_response;
+                        if (ByondTopic::query(conn.ip, conn.port, "?status", topic_response, config.topic_timeout_ms)) {
+                            active_server_ip = conn.ip;
+                            active_server_port = conn.port;
+                            cached_server = Server::from_topic_response(topic_response, active_server_ip, active_server_port);
+                            has_server_info = true;
+                            active_server_supports_topic = true;
+                            found_responsive = true;
+                            last_topic_query_time = std::chrono::steady_clock::now();
 
-                bool is_first_query = (last_topic_query_time.time_since_epoch().count() == 0);
-                auto elapsed_seconds = std::chrono::duration_cast<std::chrono::seconds>(now - last_topic_query_time).count();
-
-                if (is_first_query || elapsed_seconds >= required_cooldown) {
-                    last_topic_query_time = now;
-                    std::string topic_response;
-
-                    if (ByondTopic::query(active_server_ip, active_server_port, "?status", topic_response, config.topic_timeout_ms)) {
-                        cached_server = Server::from_topic_response(topic_response, active_server_ip, active_server_port);
-                        has_server_info = true;
-                        active_server_supports_topic = true;
-
-                        std::cout << "[SS13] Topic query: " << cached_server.get_name()
-                                  << " | Map: " << (cached_server.get_map_name().empty() ? "Station" : cached_server.get_map_name())
-                                  << " | Players: " << cached_server.get_population()
-                                  << " | Next refresh in " << config.server_refresh_seconds << "s\n";
-                    } else {
-                        if (active_server_supports_topic) {
-                            std::cout << "[SS13] Notice: Server at " << active_server_ip << ":" << active_server_port
-                                      << " did not respond to ?status. Entering " << config.failed_query_cooldown_seconds
-                                      << "s backoff cooldown to avoid host strain.\n";
+                            std::cout << "[SS13] Connected to server: " << cached_server.get_name()
+                                      << " (" << active_server_ip << ":" << active_server_port << ")\n"
+                                      << "       Map: " << (cached_server.get_map_name().empty() ? "Station" : cached_server.get_map_name())
+                                      << " | Players: " << cached_server.get_population()
+                                      << " | Next refresh in " << config.server_refresh_seconds << "s\n";
+                            break;
                         }
+                    }
+
+                    if (!found_responsive) {
+                        // Fallback: None of the candidate connections responded to ?status (e.g. host blocks ?status)
+                        // Pick the primary connection (highest priority external server)
+                        active_server_ip = connections[0].ip;
+                        active_server_port = connections[0].port;
                         active_server_supports_topic = false;
+                        has_server_info = false;
+                        last_topic_query_time = std::chrono::steady_clock::now();
+
+                        std::cout << "[SS13] Connected to " << active_server_ip << ":" << active_server_port
+                                  << " (?status blocked or unsupported). Backing off for "
+                                  << config.failed_query_cooldown_seconds << "s.\n";
+                    }
+                } else {
+                    // Active server is already identified and still connected.
+                    // Check if it's time for a periodic refresh
+                    auto now = std::chrono::steady_clock::now();
+                    int required_cooldown = active_server_supports_topic
+                        ? config.server_refresh_seconds
+                        : config.failed_query_cooldown_seconds;
+
+                    auto elapsed_seconds = std::chrono::duration_cast<std::chrono::seconds>(now - last_topic_query_time).count();
+
+                    if (elapsed_seconds >= required_cooldown) {
+                        last_topic_query_time = now;
+                        std::string topic_response;
+
+                        if (ByondTopic::query(active_server_ip, active_server_port, "?status", topic_response, config.topic_timeout_ms)) {
+                            cached_server = Server::from_topic_response(topic_response, active_server_ip, active_server_port);
+                            has_server_info = true;
+                            active_server_supports_topic = true;
+                        } else {
+                            if (active_server_supports_topic) {
+                                std::cout << "[SS13] Notice: Server at " << active_server_ip << ":" << active_server_port
+                                          << " did not respond to ?status. Entering " << config.failed_query_cooldown_seconds
+                                          << "s backoff cooldown to avoid host strain.\n";
+                            }
+                            active_server_supports_topic = false;
+                        }
                     }
                 }
 

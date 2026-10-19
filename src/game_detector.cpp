@@ -32,23 +32,25 @@ std::vector<DWORD> GameDetector::find_dreamseeker_pids() {
 }
 
 std::vector<ServerEndpoint> GameDetector::find_server_connections(const std::vector<DWORD>& pids) {
-    std::vector<ServerEndpoint> connections;
+    std::vector<ServerEndpoint> external_conns;
+    std::vector<ServerEndpoint> loopback_conns;
+
     if (pids.empty()) {
-        return connections;
+        return external_conns;
     }
 
     DWORD size = 0;
     // First call to determine required buffer size
     GetExtendedTcpTable(nullptr, &size, TRUE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
     if (size == 0) {
-        return connections;
+        return external_conns;
     }
 
     std::vector<BYTE> buffer(size);
     PMIB_TCPTABLE_OWNER_PID table = reinterpret_cast<PMIB_TCPTABLE_OWNER_PID>(buffer.data());
 
     if (GetExtendedTcpTable(table, &size, TRUE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0) != NO_ERROR) {
-        return connections;
+        return external_conns;
     }
 
     for (DWORD i = 0; i < table->dwNumEntries; ++i) {
@@ -76,11 +78,21 @@ std::vector<ServerEndpoint> GameDetector::find_server_connections(const std::vec
         char ip_buf[INET_ADDRSTRLEN] = {0};
 
         if (inet_ntop(AF_INET, &addr, ip_buf, sizeof(ip_buf))) {
-            // Avoid loopback unless it's explicitly desired
-            connections.push_back({ip_buf, remote_port, row.dwOwningPid});
+            std::string ip_str = ip_buf;
+            // Differentiate local loopback IPC (BYOND pager communication) from remote game servers
+            if (ip_str.rfind("127.", 0) == 0 || ip_str == "0.0.0.0") {
+                loopback_conns.push_back({ip_str, remote_port, row.dwOwningPid});
+            } else {
+                external_conns.push_back({ip_str, remote_port, row.dwOwningPid});
+            }
         }
     }
 
-    return connections;
-}
+    // If external connections exist, they are remote game servers (127.0.0.1 is just BYOND pager IPC)
+    if (!external_conns.empty()) {
+        return external_conns;
+    }
 
+    // Only return loopback if no external connections exist (e.g. user self-hosting DreamDaemon locally)
+    return loopback_conns;
+}
