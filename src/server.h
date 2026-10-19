@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <unordered_map>
 #include <sstream>
+#include <nlohmann/json.hpp>
 
 class Server {
 private:
@@ -22,6 +23,12 @@ private:
 
 public:
     Server() = default;
+
+    // Checks whether this server instance holds valid, parsed game info
+    // (returns false if the server returned an error, rejected the query, or gave no game fields)
+    bool is_valid() const {
+        return !version.empty() || !map_name.empty() || !gamemode.empty() || round_duration_sec > 0;
+    }
 
     // Getters
     const std::string& get_ip() const { return ip; }
@@ -84,12 +91,80 @@ public:
         return params;
     }
 
-    // Constructs a Server instance by parsing the raw URL-encoded string returned by BYOND's ?status
+    // Constructs a Server instance by parsing the raw response returned by BYOND's ?status.
+    // Supports both standard URL-encoded strings (version=...&players=...) and JSON responses.
     static Server from_topic_response(const std::string& raw_response, const std::string& server_ip, uint16_t server_port) {
         Server server;
         server.ip = server_ip;
         server.port = server_port;
 
+        if (raw_response.empty()) {
+            return server;
+        }
+
+        // Check if response is formatted as JSON
+        if (raw_response.front() == '{') {
+            try {
+                auto j = nlohmann::json::parse(raw_response);
+
+                // Detect error responses from restricted or API-only topic endpoints
+                // e.g. {"statuscode":400,"response":"Bad Request - Invalid JSON format"}
+                if (j.contains("statuscode")) {
+                    int code = 0;
+                    if (j["statuscode"].is_number()) code = j["statuscode"].get<int>();
+                    else if (j["statuscode"].is_string()) code = std::stoi(j["statuscode"].get<std::string>());
+                    if (code >= 400) {
+                        return server; // Invalid / rejected query
+                    }
+                }
+                if (j.contains("error")) {
+                    return server;
+                }
+
+                // Parse JSON game fields if provided
+                if (j.contains("version") && j["version"].is_string()) server.version = j["version"].get<std::string>();
+                if (j.contains("map_name") && j["map_name"].is_string()) server.map_name = j["map_name"].get<std::string>();
+                if (j.contains("mode") && j["mode"].is_string()) server.gamemode = j["mode"].get<std::string>();
+                else if (j.contains("gamemode") && j["gamemode"].is_string()) server.gamemode = j["gamemode"].get<std::string>();
+
+                if (j.contains("station_name") && j["station_name"].is_string() && !j["station_name"].get<std::string>().empty()) {
+                    server.name = j["station_name"].get<std::string>();
+                } else if (j.contains("identifier") && j["identifier"].is_string() && !j["identifier"].get<std::string>().empty()) {
+                    std::string ident = j["identifier"].get<std::string>();
+                    server.name = server.version.empty() ? ident : (server.version + " (" + ident + ")");
+                } else if (!server.version.empty()) {
+                    server.name = server.version;
+                } else {
+                    server.name = server_ip + ":" + std::to_string(server_port);
+                }
+
+                if (j.contains("players")) {
+                    if (j["players"].is_number()) server.population = j["players"].get<int>();
+                    else if (j["players"].is_string()) {
+                        try { server.population = std::stoi(j["players"].get<std::string>()); } catch (...) {}
+                    }
+                }
+                if (j.contains("round_duration")) {
+                    if (j["round_duration"].is_number()) server.round_duration_sec = j["round_duration"].get<int>();
+                    else if (j["round_duration"].is_string()) {
+                        try { server.round_duration_sec = std::stoi(j["round_duration"].get<std::string>()); } catch (...) {}
+                    }
+                }
+                if (j.contains("round_id")) {
+                    if (j["round_id"].is_number()) server.round_id = j["round_id"].get<int>();
+                    else if (j["round_id"].is_string()) {
+                        try { server.round_id = std::stoi(j["round_id"].get<std::string>()); } catch (...) {}
+                    }
+                }
+
+                server.current_round_time = std::chrono::system_clock::now() - std::chrono::seconds(server.round_duration_sec);
+                return server;
+            } catch (...) {
+                // If JSON parsing fails, fall through to URL-encoded query string parsing
+            }
+        }
+
+        // Standard BYOND URL-encoded format (version=...&players=...)
         auto params = parse_query_string(raw_response);
 
         if (params.find("version") != params.end()) {

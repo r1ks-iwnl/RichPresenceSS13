@@ -143,20 +143,23 @@ int main(int argc, char* argv[]) {
                     for (const auto& conn : connections) {
                         std::string topic_response;
                         if (ByondTopic::query(conn.ip, conn.port, "?status", topic_response, config.topic_timeout_ms)) {
-                            active_server_ip = conn.ip;
-                            active_server_port = conn.port;
-                            cached_server = Server::from_topic_response(topic_response, active_server_ip, active_server_port);
-                            has_server_info = true;
-                            active_server_supports_topic = true;
-                            found_responsive = true;
-                            last_topic_query_time = std::chrono::steady_clock::now();
+                            Server parsed = Server::from_topic_response(topic_response, conn.ip, conn.port);
+                            if (parsed.is_valid()) {
+                                active_server_ip = conn.ip;
+                                active_server_port = conn.port;
+                                cached_server = parsed;
+                                has_server_info = true;
+                                active_server_supports_topic = true;
+                                found_responsive = true;
+                                last_topic_query_time = std::chrono::steady_clock::now();
 
-                            std::cout << "[SS13] Connected to server: " << cached_server.get_name()
-                                      << " (" << active_server_ip << ":" << active_server_port << ")\n"
-                                      << "       Map: " << (cached_server.get_map_name().empty() ? "Station" : cached_server.get_map_name())
-                                      << " | Players: " << cached_server.get_population()
-                                      << " | Next refresh in " << config.server_refresh_seconds << "s\n";
-                            break;
+                                std::cout << "[SS13] Connected to server: " << cached_server.get_name()
+                                          << " (" << active_server_ip << ":" << active_server_port << ")\n"
+                                          << "       Map: " << (cached_server.get_map_name().empty() ? "Station" : cached_server.get_map_name())
+                                          << " | Players: " << cached_server.get_population()
+                                          << " | Next refresh in " << config.server_refresh_seconds << "s\n";
+                                break;
+                            }
                         }
                     }
 
@@ -188,9 +191,19 @@ int main(int argc, char* argv[]) {
                         std::string topic_response;
 
                         if (ByondTopic::query(active_server_ip, active_server_port, "?status", topic_response, config.topic_timeout_ms)) {
-                            cached_server = Server::from_topic_response(topic_response, active_server_ip, active_server_port);
-                            has_server_info = true;
-                            active_server_supports_topic = true;
+                            Server parsed = Server::from_topic_response(topic_response, active_server_ip, active_server_port);
+                            if (parsed.is_valid()) {
+                                cached_server = parsed;
+                                has_server_info = true;
+                                active_server_supports_topic = true;
+                            } else {
+                                if (active_server_supports_topic) {
+                                    std::cout << "[SS13] Notice: Server at " << active_server_ip << ":" << active_server_port
+                                              << " returned unparseable or error response. Entering " << config.failed_query_cooldown_seconds
+                                              << "s backoff.\n";
+                                }
+                                active_server_supports_topic = false;
+                            }
                         } else {
                             if (active_server_supports_topic) {
                                 std::cout << "[SS13] Notice: Server at " << active_server_ip << ":" << active_server_port

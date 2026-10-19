@@ -110,6 +110,21 @@ bool test_server_from_topic_response() {
     Server malformed_server = Server::from_topic_response(malformed_raw, "10.0.0.1", 1337);
     TEST_ASSERT(malformed_server.get_population() == 0, "malformed player count should fallback to 0");
     TEST_ASSERT(malformed_server.get_round_duration_sec() == 0, "malformed duration should fallback to 0");
+
+    // JSON response from servers that reject unauthenticated ?status (e.g. 78.47.208.70)
+    std::string bad_request_raw = "{\"statuscode\":400,\"response\":\"Bad Request - Invalid JSON format\"}";
+    Server bad_request_server = Server::from_topic_response(bad_request_raw, "78.47.208.70", 7878);
+    TEST_ASSERT(!bad_request_server.is_valid(), "400 Bad Request response must be marked invalid");
+
+    // Valid JSON status response
+    std::string valid_json_raw = "{\"version\":\"CM-SS13\",\"map_name\":\"Solaris Ridge\",\"players\":45,\"round_duration\":2100}";
+    Server valid_json_server = Server::from_topic_response(valid_json_raw, "1.1.1.1", 1234);
+    TEST_ASSERT(valid_json_server.is_valid(), "valid JSON response must be marked valid");
+    TEST_ASSERT(valid_json_server.get_name() == "CM-SS13", "JSON version should be parsed");
+    TEST_ASSERT(valid_json_server.get_map_name() == "Solaris Ridge", "JSON map_name should be parsed");
+    TEST_ASSERT(valid_json_server.get_population() == 45, "JSON players count should be parsed");
+    TEST_ASSERT(valid_json_server.get_round_duration_sec() == 2100, "JSON round_duration should be parsed");
+
     return true;
 }
 
