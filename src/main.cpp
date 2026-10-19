@@ -8,7 +8,7 @@
 #include <csignal>
 
 #include "config.h"
-#include "../server.h"
+#include "server.h"
 #include "game_detector.h"
 #include "byond_topic.h"
 #include "discord_rpc.h"

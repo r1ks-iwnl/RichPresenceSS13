@@ -25,9 +25,3 @@ target_link_libraries(RPSS13 PRIVATE
     ws2_32
     iphlpapi
 )
-
-# Optional standalone target for your original IPC test code
-add_executable(ipc_test
-    src/ipc.cpp
-    src/contact.cpp
-)

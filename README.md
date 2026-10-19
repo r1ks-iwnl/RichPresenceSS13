@@ -39,7 +39,7 @@ A lightweight, native C++ Discord Rich Presence client for **Space Station 13**.
 ```
 
 ### Module Breakdown
-- [`server.h`](file:///d:/Code/C++/RichPresenceSS13/server.h): Data structure storing server state, with URL decoding and `?status` response parser.
+- [`src/server.h`](file:///d:/Code/C++/RichPresenceSS13/src/server.h): Data structure storing server state, with URL decoding and `?status` response parser.
 - [`src/game_detector.h`](file:///d:/Code/C++/RichPresenceSS13/src/game_detector.h) / [`src/game_detector.cpp`](file:///d:/Code/C++/RichPresenceSS13/src/game_detector.cpp): Process enumeration and TCP connection table inspection via `GetExtendedTcpTable`.
 - [`src/byond_topic.h`](file:///d:/Code/C++/RichPresenceSS13/src/byond_topic.h) / [`src/byond_topic.cpp`](file:///d:/Code/C++/RichPresenceSS13/src/byond_topic.cpp): Implementation of the BYOND binary `0x83` query protocol with timeout handling.
 - [`src/discord_rpc.h`](file:///d:/Code/C++/RichPresenceSS13/src/discord_rpc.h) / [`src/discord_rpc.cpp`](file:///d:/Code/C++/RichPresenceSS13/src/discord_rpc.cpp): Named pipe communication (`\\.\pipe\discord-ipc-0`), handshake, and `SET_ACTIVITY` serialization.
