@@ -93,3 +93,10 @@ Or override client ID on the command line:
 ```powershell
 .\build\RPSS13.exe 1545495325366550630
 ```
+
+### Run Tests
+```powershell
+ctest --test-dir build --output-on-failure
+# Or directly:
+.\build\RPSS13_Tests.exe
+```
