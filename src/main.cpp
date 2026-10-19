@@ -5,7 +5,6 @@
 #include <chrono>
 #include <thread>
 #include <atomic>
-#include <algorithm>
 #include <cstring>
 
 #include "config.h"
@@ -147,7 +146,7 @@ int main(int argc, char* argv[]) {
                             if (parsed.is_valid()) {
                                 active_server_ip = conn.ip;
                                 active_server_port = conn.port;
-                                cached_server = parsed;
+                                cached_server = std::move(parsed);
                                 has_server_info = true;
                                 active_server_supports_topic = true;
                                 found_responsive = true;
@@ -208,7 +207,7 @@ int main(int argc, char* argv[]) {
                         if (ByondTopic::query(active_server_ip, active_server_port, "?status", topic_response, config.topic_timeout_ms)) {
                             Server parsed = Server::from_topic_response(topic_response, active_server_ip, active_server_port);
                             if (parsed.is_valid()) {
-                                cached_server = parsed;
+                                cached_server = std::move(parsed);
                                 has_server_info = true;
                                 active_server_supports_topic = true;
                             } else {

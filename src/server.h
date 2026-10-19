@@ -25,6 +25,10 @@ private:
 
 public:
     Server() = default;
+    Server(const Server&) = default;
+    Server& operator=(const Server&) = default;
+    Server(Server&&) noexcept = default;
+    Server& operator=(Server&&) noexcept = default;
 
     // Checks if a string looks like a 40-char or 7-char Git commit hash (SHA)
     static bool is_git_hash(const std::string& str) {
