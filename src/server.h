@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <unordered_map>
 #include <sstream>
+#include <vector>
+#include <cctype>
 #include <nlohmann/json.hpp>
 
 class Server {
@@ -24,10 +26,64 @@ private:
 public:
     Server() = default;
 
+    // Checks if a string looks like a 40-char or 7-char Git commit hash (SHA)
+    static bool is_git_hash(const std::string& str) {
+        if (str.length() != 40 && str.length() != 7) return false;
+        for (char c : str) {
+            if (!std::isxdigit(static_cast<unsigned char>(c))) return false;
+        }
+        return true;
+    }
+
+    // Parses duration in seconds from either a raw integer string or "HH:MM:SS" / "MM:SS" format
+    static int parse_duration(const std::string& str) {
+        if (str.empty()) return 0;
+        if (str.find(':') != std::string::npos) {
+            std::stringstream ss(str);
+            std::string token;
+            std::vector<int> parts;
+            while (std::getline(ss, token, ':')) {
+                try { parts.push_back(std::stoi(token)); } catch (...) { return 0; }
+            }
+            if (parts.size() == 3) {
+                return parts[0] * 3600 + parts[1] * 60 + parts[2];
+            } else if (parts.size() == 2) {
+                return parts[0] * 60 + parts[1];
+            }
+            return 0;
+        }
+        try { return std::stoi(str); } catch (...) { return 0; }
+    }
+
+    // Selects the cleanest human-readable server name, ignoring git hashes
+    static std::string determine_server_name(
+        const std::string& station_name,
+        const std::string& identifier,
+        const std::string& version,
+        const std::string& fallback)
+    {
+        if (!station_name.empty() && !is_git_hash(station_name)) {
+            return station_name;
+        }
+        if (!identifier.empty()) {
+            if (!version.empty() && !is_git_hash(version)) {
+                return version + " (" + identifier + ")";
+            }
+            return identifier;
+        }
+        if (!version.empty() && !is_git_hash(version)) {
+            return version;
+        }
+        return fallback;
+    }
+
     // Checks whether this server instance holds valid, parsed game info
-    // (returns false if the server returned an error, rejected the query, or gave no game fields)
+    // (returns false if the server returned an error or gave no recognizable game fields)
     bool is_valid() const {
-        return !version.empty() || !map_name.empty() || !gamemode.empty() || round_duration_sec > 0;
+        return (!version.empty() && !is_git_hash(version)) ||
+               !map_name.empty() ||
+               !gamemode.empty() ||
+               round_duration_sec > 0;
     }
 
     // Getters
@@ -121,22 +177,15 @@ public:
                     return server;
                 }
 
-                // Parse JSON game fields if provided
+                // Parse JSON game fields
                 if (j.contains("version") && j["version"].is_string()) server.version = j["version"].get<std::string>();
                 if (j.contains("map_name") && j["map_name"].is_string()) server.map_name = j["map_name"].get<std::string>();
                 if (j.contains("mode") && j["mode"].is_string()) server.gamemode = j["mode"].get<std::string>();
                 else if (j.contains("gamemode") && j["gamemode"].is_string()) server.gamemode = j["gamemode"].get<std::string>();
 
-                if (j.contains("station_name") && j["station_name"].is_string() && !j["station_name"].get<std::string>().empty()) {
-                    server.name = j["station_name"].get<std::string>();
-                } else if (j.contains("identifier") && j["identifier"].is_string() && !j["identifier"].get<std::string>().empty()) {
-                    std::string ident = j["identifier"].get<std::string>();
-                    server.name = server.version.empty() ? ident : (server.version + " (" + ident + ")");
-                } else if (!server.version.empty()) {
-                    server.name = server.version;
-                } else {
-                    server.name = server_ip + ":" + std::to_string(server_port);
-                }
+                std::string station_name = (j.contains("station_name") && j["station_name"].is_string()) ? j["station_name"].get<std::string>() : "";
+                std::string identifier = (j.contains("identifier") && j["identifier"].is_string()) ? j["identifier"].get<std::string>() : "";
+                server.name = determine_server_name(station_name, identifier, server.version, server_ip + ":" + std::to_string(server_port));
 
                 if (j.contains("players")) {
                     if (j["players"].is_number()) server.population = j["players"].get<int>();
@@ -144,12 +193,21 @@ public:
                         try { server.population = std::stoi(j["players"].get<std::string>()); } catch (...) {}
                     }
                 }
-                if (j.contains("round_duration")) {
-                    if (j["round_duration"].is_number()) server.round_duration_sec = j["round_duration"].get<int>();
-                    else if (j["round_duration"].is_string()) {
-                        try { server.round_duration_sec = std::stoi(j["round_duration"].get<std::string>()); } catch (...) {}
+
+                // Parse round duration: supports int seconds or formatted "HH:MM:SS" (e.g. "roundtime": "00:46:49")
+                std::string dur_key;
+                if (j.contains("round_duration")) dur_key = "round_duration";
+                else if (j.contains("roundtime")) dur_key = "roundtime";
+                else if (j.contains("round_time")) dur_key = "round_time";
+
+                if (!dur_key.empty()) {
+                    if (j[dur_key].is_number()) {
+                        server.round_duration_sec = j[dur_key].get<int>();
+                    } else if (j[dur_key].is_string()) {
+                        server.round_duration_sec = parse_duration(j[dur_key].get<std::string>());
                     }
                 }
+
                 if (j.contains("round_id")) {
                     if (j["round_id"].is_number()) server.round_id = j["round_id"].get<int>();
                     else if (j["round_id"].is_string()) {
@@ -179,23 +237,10 @@ public:
             server.gamemode = params["gamemode"];
         }
 
-        // Determine best server display name
-        if (params.find("station_name") != params.end() && !params["station_name"].empty()) {
-            server.name = params["station_name"];
-        } else if (params.find("identifier") != params.end() && !params["identifier"].empty()) {
-            std::string ident = params["identifier"];
-            if (!server.version.empty()) {
-                server.name = server.version + " (" + ident + ")";
-            } else {
-                server.name = ident;
-            }
-        } else if (!server.version.empty()) {
-            server.name = server.version;
-        } else {
-            server.name = server_ip + ":" + std::to_string(server_port);
-        }
+        std::string station_name = (params.find("station_name") != params.end()) ? params["station_name"] : "";
+        std::string identifier = (params.find("identifier") != params.end()) ? params["identifier"] : "";
+        server.name = determine_server_name(station_name, identifier, server.version, server_ip + ":" + std::to_string(server_port));
 
-        // Population (player count)
         if (params.find("players") != params.end()) {
             try {
                 server.population = std::stoi(params["players"]);
@@ -204,16 +249,15 @@ public:
             }
         }
 
-        // Round duration (in seconds)
+        // Parse round duration: supports int seconds or formatted "HH:MM:SS"
         if (params.find("round_duration") != params.end()) {
-            try {
-                server.round_duration_sec = std::stoi(params["round_duration"]);
-            } catch (...) {
-                server.round_duration_sec = 0;
-            }
+            server.round_duration_sec = parse_duration(params["round_duration"]);
+        } else if (params.find("roundtime") != params.end()) {
+            server.round_duration_sec = parse_duration(params["roundtime"]);
+        } else if (params.find("round_time") != params.end()) {
+            server.round_duration_sec = parse_duration(params["round_time"]);
         }
 
-        // Round ID
         if (params.find("round_id") != params.end()) {
             try {
                 server.round_id = std::stoi(params["round_id"]);
@@ -222,9 +266,7 @@ public:
             }
         }
 
-        // Calculate when the round started
         server.current_round_time = std::chrono::system_clock::now() - std::chrono::seconds(server.round_duration_sec);
-
         return server;
     }
 };

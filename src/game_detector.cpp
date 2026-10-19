@@ -101,3 +101,39 @@ std::vector<ServerEndpoint> GameDetector::find_server_connections(const std::vec
     // Only return loopback if no external connections exist (e.g. self-hosting on localhost)
     return loopback_conns;
 }
+
+struct WindowSearchData {
+    DWORD pid;
+    std::string title;
+};
+
+static BOOL CALLBACK EnumWindowsCallback(HWND hwnd, LPARAM lParam) {
+    auto* data = reinterpret_cast<WindowSearchData*>(lParam);
+    DWORD window_pid = 0;
+    GetWindowThreadProcessId(hwnd, &window_pid);
+
+    if (window_pid == data->pid && IsWindowVisible(hwnd)) {
+        wchar_t buf[256] = {0};
+        int len = GetWindowTextW(hwnd, buf, 255);
+        if (len > 0) {
+            int utf8_len = WideCharToMultiByte(CP_UTF8, 0, buf, len, nullptr, 0, nullptr, nullptr);
+            if (utf8_len > 0) {
+                std::string title(utf8_len, '\0');
+                WideCharToMultiByte(CP_UTF8, 0, buf, len, &title[0], utf8_len, nullptr, nullptr);
+                // Exclude generic "Dream Seeker" or BYOND title wrappers
+                if (title != "Dream Seeker" && title.find("BYOND") == std::string::npos) {
+                    data->title = title;
+                    return FALSE; // Found a specific window title, stop enumeration
+                }
+            }
+        }
+    }
+    return TRUE;
+}
+
+std::string GameDetector::get_dreamseeker_window_title(DWORD pid) {
+    WindowSearchData data{pid, ""};
+    EnumWindows(EnumWindowsCallback, reinterpret_cast<LPARAM>(&data));
+    return data.title;
+}
+

@@ -24,6 +24,9 @@ public:
     // Inspects established TCP connections owned by the given dreamseeker PIDs
     // Filters out HTTP/HTTPS web ports to find candidate SS13 game server connections
     static std::vector<ServerEndpoint> find_server_connections(const std::vector<DWORD>& pids);
+
+    // Retrieves the visible main window title of DreamSeeker if available
+    static std::string get_dreamseeker_window_title(DWORD pid);
 };
 
 #endif // GAME_DETECTOR_H

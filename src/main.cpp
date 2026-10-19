@@ -240,7 +240,21 @@ int main(int argc, char* argv[]) {
                 // Construct presence activity
                 DiscordActivity activity;
                 if (has_server_info) {
-                    activity.details = cached_server.get_name();
+                    std::string display_name = cached_server.get_name();
+                    std::string ip_port = active_server_ip + ":" + std::to_string(active_server_port);
+                    if ((display_name == ip_port || display_name == "Space Station 13") && !connections.empty()) {
+                        std::string win_title = GameDetector::get_dreamseeker_window_title(connections[0].pid);
+                        if (!win_title.empty()) {
+                            size_t pos = win_title.find(" - Space Station 13");
+                            if (pos != std::string::npos) {
+                                win_title = win_title.substr(0, pos);
+                            }
+                            display_name = win_title;
+                        } else {
+                            display_name = "Space Station 13";
+                        }
+                    }
+                    activity.details = display_name;
 
                     std::string state_text;
                     if (!cached_server.get_map_name().empty()) {
@@ -268,7 +282,14 @@ int main(int argc, char* argv[]) {
                     activity.small_text = config.small_image_text;
                 } else {
                     // Fallback when ?status is disabled or firewalled by host
-                    activity.details = "Playing Space Station 13";
+                    std::string title = "Playing Space Station 13";
+                    if (!connections.empty()) {
+                        std::string win_title = GameDetector::get_dreamseeker_window_title(connections[0].pid);
+                        if (!win_title.empty()) {
+                            title = win_title;
+                        }
+                    }
+                    activity.details = title;
                     activity.state = "Server: " + active_server_ip + ":" + std::to_string(active_server_port);
                     activity.large_image = config.large_image_key;
                     activity.large_text = config.large_image_text;

@@ -125,6 +125,21 @@ bool test_server_from_topic_response() {
     TEST_ASSERT(valid_json_server.get_population() == 45, "JSON players count should be parsed");
     TEST_ASSERT(valid_json_server.get_round_duration_sec() == 2100, "JSON round_duration should be parsed");
 
+    // Paradise Station response with Git commit hash in version and formatted HH:MM:SS roundtime
+    std::string paradise_hash_raw = "{\"version\":\"0ab06a7b1ec438bc048d78258501b5c088dee31f\",\"mode\":\"secret\",\"players\":5,\"roundtime\":\"00:46:49\",\"map_name\":\"NSS Legaria\"}";
+    Server paradise_hash_server = Server::from_topic_response(paradise_hash_raw, "172.93.101.245", 6666);
+    TEST_ASSERT(paradise_hash_server.is_valid(), "Paradise server with git hash must be valid");
+    TEST_ASSERT(paradise_hash_server.get_name() == "172.93.101.245:6666", "git hash should not be used as display name; fallback to ip:port");
+    TEST_ASSERT(paradise_hash_server.get_map_name() == "NSS Legaria", "map name should be NSS Legaria");
+    TEST_ASSERT(paradise_hash_server.get_population() == 5, "population should be 5");
+    TEST_ASSERT(paradise_hash_server.get_round_duration_sec() == 2809, "00:46:49 duration must parse to 2809 seconds");
+
+    // Direct duration parser tests
+    TEST_ASSERT(Server::parse_duration("00:46:49") == 2809, "HH:MM:SS parsing failed");
+    TEST_ASSERT(Server::parse_duration("15:30") == 930, "MM:SS parsing failed");
+    TEST_ASSERT(Server::parse_duration("1200") == 1200, "raw integer string parsing failed");
+    TEST_ASSERT(Server::parse_duration("") == 0, "empty string should parse to 0");
+
     return true;
 }
 
