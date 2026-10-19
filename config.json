@@ -1,0 +1,9 @@
+{
+    "client_id": "1545495325366550630",
+    "large_image_key": "ss13",
+    "large_image_text": "Space Station 13",
+    "poll_interval_seconds": 5,
+    "small_image_key": "",
+    "small_image_text": "",
+    "topic_timeout_ms": 3000
+}
