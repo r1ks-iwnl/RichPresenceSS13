@@ -5,7 +5,6 @@
 #include <string>
 #include <vector>
 #include <cassert>
-#include <cmath>
 #include <chrono>
 
 #include "server.h"
@@ -102,6 +101,7 @@ bool test_server_from_topic_response() {
     // Minimal fallback response (no known name fields)
     std::string fallback_raw = "players=5";
     Server fallback_server = Server::from_topic_response(fallback_raw, "10.0.0.1", 1337);
+    TEST_ASSERT(fallback_server.is_valid(), "server with only player count should be valid");
     TEST_ASSERT(fallback_server.get_name() == "10.0.0.1:1337", "fallback name should be ip:port");
     TEST_ASSERT(fallback_server.get_population() == 5, "population should be 5");
 
@@ -140,6 +140,11 @@ bool test_server_from_topic_response() {
     TEST_ASSERT(Server::parse_duration("1200") == 1200, "raw integer string parsing failed");
     TEST_ASSERT(Server::parse_duration("") == 0, "empty string should parse to 0");
 
+    // Git hash tests: 40-char SHA is rejected from server name, but 7-char short tags are preserved
+    TEST_ASSERT(Server::is_git_hash("0ab06a7b1ec438bc048d78258501b5c088dee31f"), "40-char SHA must be detected as git hash");
+    TEST_ASSERT(!Server::is_git_hash("1a2b3c4"), "7-char tag should NOT be rejected as git hash");
+    TEST_ASSERT(!Server::is_git_hash("v1.0.0"), "normal version tag should NOT be git hash");
+
     return true;
 }
 
@@ -155,8 +160,13 @@ bool test_app_config() {
     TEST_ASSERT(config.failed_query_cooldown_seconds == 180, "default failed_query_cooldown_seconds should be 180");
     TEST_ASSERT(config.topic_timeout_ms == 3000, "default topic timeout should be 3000ms");
 
-    // Save and load test
+    // Save and load test with RAII cleanup
     std::string temp_config = "test_temp_config.json";
+    struct TempFileCleaner {
+        std::string path;
+        ~TempFileCleaner() { DeleteFileA(path.c_str()); }
+    } cleaner{temp_config};
+
     config.client_id = "999888777666555444";
     config.large_image_key = "custom_icon";
     config.server_refresh_seconds = 45;
@@ -169,7 +179,18 @@ bool test_app_config() {
     TEST_ASSERT(loaded.server_refresh_seconds == 45, "loaded server_refresh_seconds should match saved");
     TEST_ASSERT(loaded.failed_query_cooldown_seconds == 120, "loaded failed_query_cooldown_seconds should match saved");
 
-    DeleteFileA(temp_config.c_str());
+    // Sanitize / clamping test: invalid or out-of-range values should be clamped to safe minimums
+    AppConfig bad_config;
+    bad_config.local_poll_interval_seconds = -1;
+    bad_config.server_refresh_seconds = 0;
+    bad_config.failed_query_cooldown_seconds = 2;
+    bad_config.topic_timeout_ms = 100;
+    bad_config.sanitize();
+    TEST_ASSERT(bad_config.local_poll_interval_seconds >= 1, "poll interval must clamp to >= 1");
+    TEST_ASSERT(bad_config.server_refresh_seconds >= 5, "server refresh must clamp to >= 5");
+    TEST_ASSERT(bad_config.failed_query_cooldown_seconds >= 10, "cooldown must clamp to >= 10");
+    TEST_ASSERT(bad_config.topic_timeout_ms >= 500, "timeout must clamp to >= 500ms");
+
     return true;
 }
 

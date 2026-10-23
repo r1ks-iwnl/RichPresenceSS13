@@ -15,6 +15,7 @@ FetchContent_MakeAvailable(nlohmann_json)
 # Main Executable
 add_executable(RPSS13 
     src/main.cpp
+    src/server.cpp
     src/discord_rpc.cpp
     src/game_detector.cpp
     src/byond_topic.cpp
@@ -33,6 +34,7 @@ enable_testing()
 
 add_executable(RPSS13_Tests
     tests/test_main.cpp
+    src/server.cpp
     src/discord_rpc.cpp
     src/game_detector.cpp
     src/byond_topic.cpp

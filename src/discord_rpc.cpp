@@ -2,6 +2,7 @@
 #include <iostream>
 #include <vector>
 #include <cstring>
+#include <algorithm>
 
 DiscordRpcClient::DiscordRpcClient(std::string client_id)
     : client_id_(std::move(client_id)), pipe_handle_(INVALID_HANDLE_VALUE) {}
@@ -21,6 +22,15 @@ bool DiscordRpcClient::connect() {
     if (is_connected()) {
         return true;
     }
+
+    auto now = std::chrono::steady_clock::now();
+    if (last_connect_attempt_.time_since_epoch().count() > 0) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_connect_attempt_).count();
+        if (elapsed < 5) {
+            return false; // Back off 5s between scan attempts when Discord is not running
+        }
+    }
+    last_connect_attempt_ = now;
 
     // Try pipes discord-ipc-0 through discord-ipc-9
     for (int i = 0; i < 10; ++i) {
@@ -115,40 +125,68 @@ bool DiscordRpcClient::write_frame(uint32_t opcode, const std::string& json_payl
     return true;
 }
 
-bool DiscordRpcClient::read_frame(uint32_t& out_opcode, std::string& out_json_payload) {
+bool DiscordRpcClient::read_bytes_with_timeout(void* buffer, DWORD bytes_to_read, DWORD timeout_ms) {
+    if (!is_connected()) {
+        return false;
+    }
+
+    BYTE* dest = static_cast<BYTE*>(buffer);
+    DWORD total_read = 0;
+    auto start_time = std::chrono::steady_clock::now();
+
+    while (total_read < bytes_to_read) {
+        DWORD bytes_avail = 0;
+        if (!PeekNamedPipe(pipe_handle_, nullptr, 0, nullptr, &bytes_avail, nullptr)) {
+            disconnect();
+            return false;
+        }
+
+        if (bytes_avail > 0) {
+            DWORD to_read = (std::min)(bytes_to_read - total_read, bytes_avail);
+            DWORD bytes_read = 0;
+            if (!ReadFile(pipe_handle_, dest + total_read, to_read, &bytes_read, nullptr) || bytes_read == 0) {
+                disconnect();
+                return false;
+            }
+            total_read += bytes_read;
+        } else {
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start_time
+            ).count();
+            if (static_cast<DWORD>(elapsed) >= timeout_ms) {
+                disconnect();
+                return false;
+            }
+            Sleep(10);
+        }
+    }
+    return true;
+}
+
+bool DiscordRpcClient::read_frame(uint32_t& out_opcode, std::string& out_json_payload, DWORD timeout_ms) {
     if (!is_connected()) {
         return false;
     }
 
     uint32_t opcode = 0;
     uint32_t length = 0;
-    DWORD bytes_read = 0;
 
-    // Read 4-byte opcode
-    BOOL ok = ReadFile(pipe_handle_, &opcode, sizeof(opcode), &bytes_read, nullptr);
-    if (!ok || bytes_read != sizeof(opcode)) {
-        disconnect();
+    // Read 4-byte opcode with timeout
+    if (!read_bytes_with_timeout(&opcode, sizeof(opcode), timeout_ms)) {
         return false;
     }
 
-    // Read 4-byte length
-    ok = ReadFile(pipe_handle_, &length, sizeof(length), &bytes_read, nullptr);
-    if (!ok || bytes_read != sizeof(length)) {
-        disconnect();
+    // Read 4-byte length with timeout
+    if (!read_bytes_with_timeout(&length, sizeof(length), timeout_ms)) {
         return false;
     }
 
-    // Read JSON payload
+    // Read JSON payload with timeout
     std::vector<char> buffer(length);
-    DWORD total_read = 0;
-
-    while (total_read < length) {
-        ok = ReadFile(pipe_handle_, buffer.data() + total_read, length - total_read, &bytes_read, nullptr);
-        if (!ok || bytes_read == 0) {
-            disconnect();
+    if (length > 0) {
+        if (!read_bytes_with_timeout(buffer.data(), length, timeout_ms)) {
             return false;
         }
-        total_read += bytes_read;
     }
 
     out_opcode = opcode;

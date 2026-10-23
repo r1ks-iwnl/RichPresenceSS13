@@ -34,6 +34,94 @@ static bool activity_equals(const DiscordActivity& a, const DiscordActivity& b) 
            a.small_text == b.small_text;
 }
 
+// Pins the round start timestamp to prevent Discord UI elapsed-time jitter and unnecessary IPC updates.
+// Only recalculates when a new round is detected.
+static void update_round_epoch(const Server& server, int64_t& pinned_epoch, int& last_round_id, int& last_duration_sec) {
+    int duration = server.get_round_duration_sec();
+    if (duration <= 0) {
+        pinned_epoch = 0;
+        return;
+    }
+
+    bool is_new_round = false;
+    if (pinned_epoch == 0) {
+        is_new_round = true;
+    } else if (server.get_round_id() > 0 && last_round_id > 0 && server.get_round_id() != last_round_id) {
+        is_new_round = true;
+    } else if (duration < last_duration_sec - 60) {
+        // Duration wrapped backwards significantly (new round started on server that doesn't report round_id)
+        is_new_round = true;
+    }
+
+    if (is_new_round) {
+        auto now_sec = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        ).count();
+        pinned_epoch = now_sec - duration;
+        last_round_id = server.get_round_id();
+    }
+    last_duration_sec = duration;
+}
+
+static DiscordActivity build_presence_activity(
+    bool has_server_info,
+    const Server& server,
+    const std::string& active_ip,
+    uint16_t active_port,
+    const std::vector<ServerEndpoint>& connections,
+    const AppConfig& config,
+    int64_t round_start_epoch)
+{
+    DiscordActivity activity;
+    if (has_server_info) {
+        std::string display_name = server.get_name();
+        std::string ip_port = active_ip + ":" + std::to_string(active_port);
+        if ((display_name == ip_port || display_name == "Space Station 13") && !connections.empty()) {
+            std::string win_title = GameDetector::get_dreamseeker_window_title(connections[0].pid);
+            if (!win_title.empty()) {
+                size_t pos = win_title.find(" - Space Station 13");
+                if (pos != std::string::npos) {
+                    win_title = win_title.substr(0, pos);
+                }
+                display_name = win_title;
+            } else {
+                display_name = "Space Station 13";
+            }
+        }
+        activity.details = display_name;
+
+        std::string state_text;
+        if (!server.get_map_name().empty()) {
+            state_text = server.get_map_name();
+        } else if (!server.get_gamemode().empty()) {
+            state_text = server.get_gamemode();
+        } else {
+            state_text = "Station";
+        }
+        state_text += " (" + std::to_string(server.get_population()) + " players)";
+        activity.state = state_text;
+
+        activity.start_timestamp = round_start_epoch;
+        activity.large_image = config.large_image_key;
+        activity.large_text = config.large_image_text;
+        activity.small_image = config.small_image_key;
+        activity.small_text = config.small_image_text;
+    } else {
+        std::string title = "Playing Space Station 13";
+        if (!connections.empty()) {
+            std::string win_title = GameDetector::get_dreamseeker_window_title(connections[0].pid);
+            if (!win_title.empty()) {
+                title = win_title;
+            }
+        }
+        activity.details = title;
+        activity.state = "Server: " + active_ip + ":" + std::to_string(active_port);
+        activity.large_image = config.large_image_key;
+        activity.large_text = config.large_image_text;
+    }
+    return activity;
+}
+
 int main(int argc, char* argv[]) {
     // Set console title
     SetConsoleTitleA("SS13 Discord Rich Presence");
@@ -79,6 +167,9 @@ int main(int argc, char* argv[]) {
     Server cached_server;
     DiscordActivity last_sent_activity;
     std::chrono::steady_clock::time_point last_topic_query_time{};
+    int64_t pinned_round_start_epoch = 0;
+    int last_round_id = 0;
+    int last_duration_sec = 0;
 
     while (g_running) {
         auto dreamseeker_pids = GameDetector::find_dreamseeker_pids();
@@ -92,6 +183,9 @@ int main(int argc, char* argv[]) {
                 active_server_port = 0;
                 active_server_supports_topic = true;
                 has_server_info = false;
+                pinned_round_start_epoch = 0;
+                last_round_id = 0;
+                last_duration_sec = 0;
                 last_topic_query_time = {};
                 last_sent_activity = {};
             }
@@ -121,6 +215,9 @@ int main(int argc, char* argv[]) {
                     active_server_ip.clear();
                     active_server_port = 0;
                     has_server_info = false;
+                    pinned_round_start_epoch = 0;
+                    last_round_id = 0;
+                    last_duration_sec = 0;
                     last_topic_query_time = {};
                 }
             } else {
@@ -151,6 +248,7 @@ int main(int argc, char* argv[]) {
                                 active_server_supports_topic = true;
                                 found_responsive = true;
                                 last_topic_query_time = std::chrono::steady_clock::now();
+                                update_round_epoch(cached_server, pinned_round_start_epoch, last_round_id, last_duration_sec);
 
                                 std::cout << "[SS13] Connected to server: " << cached_server.get_name()
                                           << " (" << active_server_ip << ":" << active_server_port << ")\n"
@@ -210,6 +308,7 @@ int main(int argc, char* argv[]) {
                                 cached_server = std::move(parsed);
                                 has_server_info = true;
                                 active_server_supports_topic = true;
+                                update_round_epoch(cached_server, pinned_round_start_epoch, last_round_id, last_duration_sec);
                             } else {
                                 if (active_server_supports_topic) {
                                     std::cout << "[SS13] Notice: Server at " << active_server_ip << ":" << active_server_port
@@ -237,62 +336,15 @@ int main(int argc, char* argv[]) {
                 }
 
                 // Construct presence activity
-                DiscordActivity activity;
-                if (has_server_info) {
-                    std::string display_name = cached_server.get_name();
-                    std::string ip_port = active_server_ip + ":" + std::to_string(active_server_port);
-                    if ((display_name == ip_port || display_name == "Space Station 13") && !connections.empty()) {
-                        std::string win_title = GameDetector::get_dreamseeker_window_title(connections[0].pid);
-                        if (!win_title.empty()) {
-                            size_t pos = win_title.find(" - Space Station 13");
-                            if (pos != std::string::npos) {
-                                win_title = win_title.substr(0, pos);
-                            }
-                            display_name = win_title;
-                        } else {
-                            display_name = "Space Station 13";
-                        }
-                    }
-                    activity.details = display_name;
-
-                    std::string state_text;
-                    if (!cached_server.get_map_name().empty()) {
-                        state_text = cached_server.get_map_name();
-                    } else if (!cached_server.get_gamemode().empty()) {
-                        state_text = cached_server.get_gamemode();
-                    } else {
-                        state_text = "Station";
-                    }
-                    state_text += " (" + std::to_string(cached_server.get_population()) + " players)";
-                    activity.state = state_text;
-
-                    // Round start timestamp: Discord's UI automatically counts elapsed seconds upward
-                    // from this timestamp without requiring repeated updates!
-                    if (cached_server.get_round_duration_sec() > 0) {
-                        auto now_sec = std::chrono::duration_cast<std::chrono::seconds>(
-                            std::chrono::system_clock::now().time_since_epoch()
-                        ).count();
-                        activity.start_timestamp = now_sec - cached_server.get_round_duration_sec();
-                    }
-
-                    activity.large_image = config.large_image_key;
-                    activity.large_text = config.large_image_text;
-                    activity.small_image = config.small_image_key;
-                    activity.small_text = config.small_image_text;
-                } else {
-                    // Fallback when ?status is disabled or firewalled by host
-                    std::string title = "Playing Space Station 13";
-                    if (!connections.empty()) {
-                        std::string win_title = GameDetector::get_dreamseeker_window_title(connections[0].pid);
-                        if (!win_title.empty()) {
-                            title = win_title;
-                        }
-                    }
-                    activity.details = title;
-                    activity.state = "Server: " + active_server_ip + ":" + std::to_string(active_server_port);
-                    activity.large_image = config.large_image_key;
-                    activity.large_text = config.large_image_text;
-                }
+                DiscordActivity activity = build_presence_activity(
+                    has_server_info,
+                    cached_server,
+                    active_server_ip,
+                    active_server_port,
+                    connections,
+                    config,
+                    pinned_round_start_epoch
+                );
 
                 // Only send update to Discord if the activity data actually changed
                 if (!activity_equals(activity, last_sent_activity)) {

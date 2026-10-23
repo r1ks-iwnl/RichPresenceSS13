@@ -5,6 +5,7 @@
 #include <iphlpapi.h>
 #include <tlhelp32.h>
 #include <algorithm>
+#include <unordered_set>
 #include <iostream>
 
 std::vector<DWORD> GameDetector::find_dreamseeker_pids() {
@@ -39,25 +40,32 @@ std::vector<ServerEndpoint> GameDetector::find_server_connections(const std::vec
         return external_conns;
     }
 
+    std::unordered_set<DWORD> pid_set(pids.begin(), pids.end());
+
     DWORD size = 0;
-    // First call to determine required buffer size
-    GetExtendedTcpTable(nullptr, &size, TRUE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
-    if (size == 0) {
-        return external_conns;
+    DWORD res = GetExtendedTcpTable(nullptr, &size, TRUE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+    std::vector<BYTE> buffer;
+    PMIB_TCPTABLE_OWNER_PID table = nullptr;
+
+    // Retry loop in case new connections are added between size calculation and retrieval
+    for (int attempts = 0; attempts < 3 && (res == ERROR_INSUFFICIENT_BUFFER || size > buffer.size()); ++attempts) {
+        buffer.resize(size);
+        table = reinterpret_cast<PMIB_TCPTABLE_OWNER_PID>(buffer.data());
+        res = GetExtendedTcpTable(table, &size, TRUE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+        if (res == NO_ERROR) {
+            break;
+        }
     }
 
-    std::vector<BYTE> buffer(size);
-    PMIB_TCPTABLE_OWNER_PID table = reinterpret_cast<PMIB_TCPTABLE_OWNER_PID>(buffer.data());
-
-    if (GetExtendedTcpTable(table, &size, TRUE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0) != NO_ERROR) {
+    if (res != NO_ERROR || !table) {
         return external_conns;
     }
 
     for (DWORD i = 0; i < table->dwNumEntries; ++i) {
         const auto& row = table->table[i];
 
-        // Check if connection is owned by one of the dreamseeker processes
-        if (std::find(pids.begin(), pids.end(), row.dwOwningPid) == pids.end()) {
+        // Check if connection is owned by one of the dreamseeker processes (O(1))
+        if (pid_set.find(row.dwOwningPid) == pid_set.end()) {
             continue;
         }
 

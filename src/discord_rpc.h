@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <string>
 #include <cstdint>
+#include <chrono>
 #include <nlohmann/json.hpp>
 
 struct DiscordActivity {
@@ -50,10 +51,12 @@ private:
     std::string client_id_;
     HANDLE pipe_handle_ = INVALID_HANDLE_VALUE;
     uint32_t nonce_counter_ = 0;
+    std::chrono::steady_clock::time_point last_connect_attempt_{};
 
     // Frame layout: [uint32 opcode (LE)] [uint32 length (LE)] [JSON string bytes]
     bool write_frame(uint32_t opcode, const std::string& json_payload);
-    bool read_frame(uint32_t& out_opcode, std::string& out_json_payload);
+    bool read_frame(uint32_t& out_opcode, std::string& out_json_payload, DWORD timeout_ms = 2000);
+    bool read_bytes_with_timeout(void* buffer, DWORD bytes_to_read, DWORD timeout_ms);
 };
 
 #endif // DISCORD_RPC_H

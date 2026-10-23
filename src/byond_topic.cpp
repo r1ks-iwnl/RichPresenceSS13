@@ -12,13 +12,19 @@ bool ByondTopic::query(const std::string& ip, uint16_t port, const std::string& 
 
     addrinfo* result = nullptr;
     std::string port_str = std::to_string(port);
+
+    struct AddrInfoGuard {
+        addrinfo* ptr = nullptr;
+        ~AddrInfoGuard() { if (ptr) freeaddrinfo(ptr); }
+    } guard;
+
     if (getaddrinfo(ip.c_str(), port_str.c_str(), &hints, &result) != 0 || !result) {
         return false;
     }
+    guard.ptr = result;
 
     SOCKET s = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
     if (s == INVALID_SOCKET) {
-        freeaddrinfo(result);
         return false;
     }
 
@@ -27,7 +33,6 @@ bool ByondTopic::query(const std::string& ip, uint16_t port, const std::string& 
     ioctlsocket(s, FIONBIO, &non_blocking);
 
     int connect_res = connect(s, result->ai_addr, static_cast<int>(result->ai_addrlen));
-    freeaddrinfo(result);
 
     if (connect_res == SOCKET_ERROR) {
         int err = WSAGetLastError();
@@ -80,9 +85,7 @@ bool ByondTopic::query(const std::string& ip, uint16_t port, const std::string& 
     packet.push_back(0x83);
     packet.push_back(static_cast<uint8_t>((packet_len >> 8) & 0xFF));
     packet.push_back(static_cast<uint8_t>(packet_len & 0xFF));
-    for (int i = 0; i < 5; ++i) {
-        packet.push_back(0x00);
-    }
+    packet.insert(packet.end(), 5, 0x00);
     packet.insert(packet.end(), query_string.begin(), query_string.end());
     packet.push_back(0x00); // Null terminator
 

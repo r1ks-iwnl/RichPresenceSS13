@@ -53,6 +53,7 @@ struct AppConfig {
                 if (j.contains("server_refresh_seconds")) config.server_refresh_seconds = j["server_refresh_seconds"].get<int>();
                 if (j.contains("failed_query_cooldown_seconds")) config.failed_query_cooldown_seconds = j["failed_query_cooldown_seconds"].get<int>();
                 if (j.contains("topic_timeout_ms")) config.topic_timeout_ms = j["topic_timeout_ms"].get<int>();
+                config.sanitize();
                 return config;
             } catch (const std::exception& e) {
                 std::cerr << "[Config] Warning: Failed to parse " << path << " (" << e.what() << "). Using defaults.\n";
@@ -60,8 +61,17 @@ struct AppConfig {
         }
 
         // Save defaults if file does not exist
+        config.sanitize();
         config.save_to_file(path);
         return config;
+    }
+
+    void sanitize() {
+        if (local_poll_interval_seconds < 1) local_poll_interval_seconds = 1;
+        if (server_refresh_seconds < 5) server_refresh_seconds = 5;
+        if (failed_query_cooldown_seconds < 10) failed_query_cooldown_seconds = 10;
+        if (topic_timeout_ms < 500) topic_timeout_ms = 500;
+        else if (topic_timeout_ms > 30000) topic_timeout_ms = 30000;
     }
 
     void save_to_file(const std::string& path = "config.json") const {
