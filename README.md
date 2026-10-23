@@ -1,6 +1,10 @@
 # Space Station 13 Discord Rich Presence (RPSS13)
 
-A lightweight, zero-configuration Discord Rich Presence client for **Space Station 13**. It automatically detects your running BYOND game, queries live round info from the server, and displays rich presence on your Discord profile.
+#  !!!!!WIP!!!!! 
+
+A lightweight Discord Rich Presence client for **Space Station 13**. Uses Discord's RPC over IPC server. It automatically detects your running BYOND game, queries live round info from the server, and displays rich presence on your Discord profile.
+
+Inspects running `dreamseeker.exe` processes and the local Windows TCP connection table to locate active remote game endpoints.
 
 ---
 
@@ -9,8 +13,6 @@ A lightweight, zero-configuration Discord Rich Presence client for **Space Stati
 1. **Download or build** `RPSS13.exe`.
 2. **Run `RPSS13.exe`** (you can start it before or after launching BYOND).
 3. **Join any Space Station 13 server** — your presence updates automatically!
-
-> **Works out of the box**: A default Discord Application ID with Space Station 13 icons is included, so no initial setup is required.
 
 ---
 
@@ -77,40 +79,3 @@ cmake --build build
 ### Run Tests
 ```powershell
 ctest --test-dir build --output-on-failure
-```
-
----
-
-<details>
-<summary><b>Technical Details & Architecture (Click to expand)</b></summary>
-
-### How It Works
-
-```
-                      +-------------------+
-                      |   DreamSeeker     |
-                      | (dreamseeker.exe) |
-                      +---------+---------+
-                                | (TCP socket)
-                                v
-+-------------+        +-------------------+
-|   Discord   | <----- |  RPSS13 (Daemon)  | -----> [ BYOND SS13 Server ]
-| Named Pipe  | (IPC)  |                   | (TCP)   (Topic: ?status)
-+-------------+        +-------------------+
-```
-
-- **Non-Invasive Game Detection**: Inspects running `dreamseeker.exe` processes and the local Windows TCP connection table to locate active remote game endpoints. Requires no game files, BYOND modifications, or hooks.
-- **Host-Friendly Topic Queries**: Queries the BYOND server's `?status` topic once per 60 seconds (rounds last 40-90+ minutes; Discord ticks elapsed time locally, so high-frequency polling is never needed).
-- **Graceful Failure Backoff**: If a server blocks or disables topic queries, RPSS13 falls back to window-title detection and backs off for 3 minutes to avoid triggering host firewalls or rate limits.
-- **Native Named-Pipe IPC**: Directly speaks Discord's local IPC protocol over Windows named pipes with zero third-party Discord SDK bloat.
-
-### Source Structure
-- `src/main.cpp` — Application loop, presence state machine, and signal handling.
-- `src/server.h` / `src/server.cpp` — Server data model, URL decoding, and topic parsing (JSON & URL-encoded).
-- `src/game_detector.h` / `src/game_detector.cpp` — Process scanning and TCP connection table inspection.
-- `src/byond_topic.h` / `src/byond_topic.cpp` — Native BYOND binary `0x83` Topic client.
-- `src/discord_rpc.h` / `src/discord_rpc.cpp` — Discord named-pipe IPC client.
-- `src/config.h` — Configuration loader and JSON serializer.
-- `tests/test_main.cpp` — CTest unit and integration test suite.
-
-</details>
